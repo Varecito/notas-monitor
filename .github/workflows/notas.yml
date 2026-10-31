@@ -1,0 +1,68 @@
+name: Avisos de calificaciones
+
+on:
+  schedule:
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Enviar confirmación de conexión por Telegram
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monitor-calificaciones
+  cancel-in-progress: false
+
+jobs:
+  revisar:
+    if: (vars.MONITOR_ENABLED == 'true' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencia de cifrado
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Verificar el monitor
+        run: python -m unittest discover -s tests -v
+      - name: Revisar y avisar
+        id: monitor
+        continue-on-error: true
+        env:
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          AUSTRALIS_DOCUMENTO: ${{ secrets.AUSTRALIS_DOCUMENTO }}
+          AUSTRALIS_PASSWORD: ${{ secrets.AUSTRALIS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
+          INITIAL_STATE: ${{ secrets.INITIAL_STATE }}
+          CONFIRM_CONNECTION: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM_CONNECTION" = "true" ]; then
+            python monitor.py --confirm
+          else
+            python monitor.py
+          fi
+      - name: Guardar solamente los archivos cifrados
+        if: always() && steps.monitor.outcome != 'skipped'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for file in state.enc health.enc; do
+            if [ -f "$file" ]; then git add -- "$file"; fi
+          done
+          if ! git diff --cached --quiet; then
+            git commit -m 'Actualizar estado cifrado del monitor'
+            git push
+          fi
+      - name: Informar fallo de la revisión
+        if: always() && steps.monitor.outcome == 'failure'
+        run: exit 1
