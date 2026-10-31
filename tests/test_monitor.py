@@ -111,6 +111,33 @@ class MonitorTests(unittest.TestCase):
         with self.assertRaises(m.MonitorError):
             m.OnlyOrigin('https://example.org').redirect_request(None, None, 302, '', {}, 'https://other.org')
 
+    def test_network_errors_never_expose_request_details(self):
+        private_detail = 'private-document private-password private-token private-grade'
+        opener = unittest.mock.Mock()
+        opener.open.side_effect = OSError(private_detail)
+        with self.assertRaises(m.MonitorError) as caught:
+            m.read_page(opener, self.cfg.portal)
+        self.assertNotIn(private_detail, str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        with patch.object(m, 'build_opener', return_value=opener):
+            with self.assertRaises(m.MonitorError) as caught:
+                m.telegram(self.cfg, private_detail)
+        self.assertNotIn(private_detail, str(caught.exception))
+        self.assertTrue(caught.exception.__suppress_context__)
+
+    def test_logs_and_persisted_state_exclude_personal_data(self):
+        output = io.StringIO()
+        for html in (page(), page('7,85')):
+            with patch.object(m, 'fetch_grades', return_value=m.parse_grades(html, '2026')), \
+                    patch.object(m, 'telegram'), contextlib.redirect_stdout(output):
+                m.run_once(self.cfg, self.store, now=self.now)
+        for value in (self.cfg.document, self.cfg.password, self.cfg.bot_token,
+                      self.cfg.chat_id, 'Profesora Ejemplo', 'Matemática', '7,85'):
+            self.assertNotIn(value, output.getvalue())
+            self.assertNotIn(value, json.dumps(self.store.read(), ensure_ascii=False))
+            self.assertNotIn(value.encode(), self.store.path.read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()
+
