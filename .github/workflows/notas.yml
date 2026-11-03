@@ -9,6 +9,14 @@ on:
         description: Enviar confirmación de conexión por Telegram
         type: boolean
         default: false
+      setup_commands:
+        description: Configurar menú privado de Telegram
+        type: boolean
+        default: false
+      send_status:
+        description: Enviar estado actual por Telegram
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -45,24 +53,31 @@ jobs:
           STATE_KEY: ${{ secrets.STATE_KEY }}
           INITIAL_STATE: ${{ secrets.INITIAL_STATE }}
           CONFIRM_CONNECTION: ${{ inputs.confirm }}
+          SETUP_COMMANDS: ${{ inputs.setup_commands }}
+          SEND_STATUS: ${{ inputs.send_status }}
         run: |
-          if [ "$CONFIRM_CONNECTION" = "true" ]; then
-            python monitor.py --confirm
-          else
-            python monitor.py
-          fi
+          args=()
+          if [ "$CONFIRM_CONNECTION" = "true" ]; then args+=(--confirm); fi
+          if [ "$SETUP_COMMANDS" = "true" ]; then args+=(--setup-commands); fi
+          if [ "$SEND_STATUS" = "true" ]; then args+=(--send-status); fi
+          python monitor.py "${args[@]}"
       - name: Guardar solamente los archivos cifrados
         if: always() && steps.monitor.outcome != 'skipped'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          for file in state.enc health.enc; do
+          for file in state.enc health.enc commands.enc; do
             if [ -f "$file" ]; then git add -- "$file"; fi
           done
           if ! git diff --cached --quiet; then
             git commit -m 'Actualizar estado cifrado del monitor'
             git push
           fi
+      - name: Confirmar la revisión al supervisor independiente
+        if: success() && steps.monitor.outcome == 'success'
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
+        run: python heartbeat.py
       - name: Informar fallo de la revisión
         if: always() && steps.monitor.outcome == 'failure'
         run: exit 1
